@@ -1,3 +1,4 @@
+fastapi
 uvicorn
 pydantic
 langchain-groq
@@ -7,10 +8,7 @@ pyyaml
 pytest
 requests
 python-dotenv
-fastapi
 python-multipart
 docker
 pytest-json-report
-
-
-#pytest.main([__file__])
+google-generativeai
