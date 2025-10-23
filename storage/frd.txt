@@ -1,0 +1,293 @@
+FUNCTIONAL REQUIREMENTS DOCUMENT (FRD)
+=====================================
+Todo List API - Complete Node.js Application
+Version: 1.0.0
+Date: 2024
+OVERVIEW
+========
+This document outlines the functional requirements for a comprehensive Todo List API built
+with Node.js, Express.js, and MongoDB. The API provides user authentication, todo
+management, and comprehensive documentation.
+TECHNOLOGY STACK
+================
+- Backend: Node.js with Express.js framework
+- Database: MongoDB with Mongoose ODM
+- Authentication: JWT (JSON Web Tokens) with bcrypt password hashing
+- Documentation: Swagger/OpenAPI 3.0
+- Validation: Express-validator
+- CORS: Enabled for cross-origin requests
+API ENDPOINTS
+=============
+1. HEALTH CHECK
+---------------
+GET /api/health
+- Purpose: Check if the API is running
+- Authentication: None required
+- Response: Server status and timestamp
+2. USER AUTHENTICATION
+======================
+2.1 User Registration
+---------------------
+POST /api/auth/signup
+- Purpose: Register a new user account
+- Authentication: None required
+- Request Body:
+- username (string, 3-30 characters, required)
+- email (string, valid email format, required)
+- password (string, minimum 6 characters, required)
+- Validation Rules:
+- Username: 3-30 characters, alphanumeric and underscores only
+- Email: Valid email format, unique in database
+- Password: Minimum 6 characters, must contain uppercase, lowercase, and number
+- Response: User object (without password) and JWT token
+- Status Codes:
+- 201: User created successfully
+- 400: Validation error or user already exists
+- 500: Server error
+2.2 User Login
+---------------
+POST /api/auth/login
+- Purpose: Authenticate user and return JWT token
+- Authentication: None required
+- Request Body:
+- email (string, valid email format, required)
+- password (string, required)
+- Response: User object (without password) and JWT token
+- Status Codes:
+- 200: Login successful
+- 400: Invalid credentials
+- 500: Server error
+3. TODO MANAGEMENT
+==================
+3.1 Get All Todos
+------------------
+GET /api/todos
+- Purpose: Retrieve all todos for authenticated user
+- Authentication: JWT token required (Bearer token in Authorization header)
+- Query Parameters:
+- page (integer, default: 1): Page number for pagination
+- limit (integer, default: 10, max: 100): Number of todos per page
+- completed (boolean): Filter by completion status
+- priority (string): Filter by priority (low, medium, high)
+- Response: Array of todos with pagination info
+- Status Codes:
+- 200: Todos retrieved successfully
+- 401: Unauthorized (invalid/missing token)
+- 500: Server error
+3.2 Get Todo by ID
+------------------
+GET /api/todos/:id
+- Purpose: Retrieve a specific todo by ID
+- Authentication: JWT token required
+- Path Parameters:
+- id (string, MongoDB ObjectId): Todo ID
+- Response: Single todo object
+- Status Codes:
+- 200: Todo retrieved successfully
+- 404: Todo not found
+- 401: Unauthorized
+- 500: Server error
+3.3 Create Todo
+---------------
+POST /api/todos
+- Purpose: Create a new todo
+- Authentication: JWT token required
+- Request Body:
+- title (string, max 100 characters, required)
+- description (string, max 500 characters, optional)
+- priority (string, enum: low/medium/high, default: medium, optional)
+- dueDate (string, ISO date format, optional)
+- Response: Created todo object
+- Status Codes:
+- 201: Todo created successfully
+- 400: Validation error
+- 401: Unauthorized
+- 500: Server error
+3.4 Update Todo
+---------------
+PUT /api/todos/:id
+- Purpose: Update an existing todo
+- Authentication: JWT token required
+- Path Parameters:
+- id (string, MongoDB ObjectId): Todo ID
+- Request Body (all fields optional):
+- title (string, max 100 characters)
+- description (string, max 500 characters)
+- completed (boolean)
+- priority (string, enum: low/medium/high)
+- dueDate (string, ISO date format)
+- Response: Updated todo object
+- Status Codes:
+- 200: Todo updated successfully
+- 404: Todo not found
+- 400: Validation error
+- 401: Unauthorized
+- 500: Server error
+3.5 Delete Todo
+---------------
+DELETE /api/todos/:id
+- Purpose: Delete a todo
+- Authentication: JWT token required
+- Path Parameters:
+- id (string, MongoDB ObjectId): Todo ID
+- Response: Success message
+- Status Codes:
+- 200: Todo deleted successfully
+- 404: Todo not found
+- 401: Unauthorized
+- 500: Server error
+AUTHENTICATION FLOW
+===================
+1. User Registration Flow:
+- User sends POST request to /api/auth/signup with username, email, password
+- Server validates input data
+- Server checks if user already exists
+- Server hashes password using bcrypt
+- Server creates user in database
+- Server generates JWT token
+- Server returns user data and token
+2. User Login Flow:
+- User sends POST request to /api/auth/login with email and password
+- Server validates input data
+- Server finds user by email
+- Server compares password using bcrypt
+- Server generates JWT token
+- Server returns user data and token
+3. Protected Route Access:
+- Client includes JWT token in Authorization header as "Bearer <token>"
+- Server validates JWT token
+- Server extracts user ID from token
+- Server allows access to protected routes
+DATA MODELS
+===========
+1. User Model:
+- _id: MongoDB ObjectId (auto-generated)
+- username: String (3-30 characters, unique)
+- email: String (valid email format, unique)
+- password: String (hashed with bcrypt)
+- createdAt: Date (auto-generated)
+- updatedAt: Date (auto-generated)
+2. Todo Model:
+- _id: MongoDB ObjectId (auto-generated)
+- title: String (max 100 characters, required)
+- description: String (max 500 characters, optional)
+- completed: Boolean (default: false)
+- priority: String (enum: low/medium/high, default: medium)
+- dueDate: Date (optional)
+- user: ObjectId (reference to User model)
+- createdAt: Date (auto-generated)
+- updatedAt: Date (auto-generated)
+SECURITY FEATURES
+=================
+1. Password Security:
+- Passwords are hashed using bcrypt with salt rounds of 10
+- Password validation requires uppercase, lowercase, and numbers
+- Passwords are never returned in API responses
+2. JWT Authentication:
+- JWT tokens are signed with a secret key
+- Tokens expire after 7 days (configurable)
+- All protected routes require valid JWT token
+3. Input Validation:
+- All inputs are validated using express-validator
+- SQL injection prevention through Mongoose ODM
+- XSS protection through input sanitization
+4. CORS Configuration:
+- CORS is enabled for cross-origin requests
+- Configurable origin settings
+ERROR HANDLING
+==============
+1. Validation Errors (400):
+- Invalid input data
+- Missing required fields
+- Data format errors
+2. Authentication Errors (401):
+- Missing JWT token
+- Invalid JWT token
+- Expired JWT token
+3. Authorization Errors (403):
+- User not authorized to access resource
+4. Not Found Errors (404):
+- Resource not found
+- Invalid resource ID
+5. Server Errors (500):
+- Database connection errors
+- Internal server errors
+- Unhandled exceptions
+DOCUMENTATION
+=============
+1. Swagger/OpenAPI Documentation:
+- Interactive API documentation at /api-docs
+- Complete endpoint documentation
+- Request/response examples
+- Authentication instructions
+2. Generated Files:
+- swagger.json: OpenAPI specification in JSON format
+- swagger.yaml: OpenAPI specification in YAML format
+3. API Response Format:
+- Consistent JSON response structure
+- Success/error indicators
+- Descriptive error messages
+- Proper HTTP status codes
+DEPLOYMENT REQUIREMENTS
+======================
+1. Environment Variables:
+- MONGODB_URI: MongoDB connection string
+- JWT_SECRET: Secret key for JWT signing
+- JWT_EXPIRE: Token expiration time
+- PORT: Server port (default: 3000)
+- NODE_ENV: Environment (development/production)
+- CORS_ORIGIN: Allowed CORS origins
+2. Dependencies:
+- Node.js (v14 or higher)
+- MongoDB (v4.4 or higher)
+- npm packages as listed in package.json
+3. File Structure:
+- server.js: Main application entry point
+- models/: Database models (User.js, Todo.js)
+- controllers/: Business logic (authController.js, todoController.js)
+- routes/: API routes (auth.js, todos.js, index.js)
+- middleware/: Custom middleware (auth.js)
+- config/: Configuration files (swagger.js)
+- scripts/: Utility scripts
+TESTING CONSIDERATIONS
+=====================
+1. Unit Testing:
+- Test individual functions and methods
+- Mock external dependencies
+- Test error scenarios
+2. Integration Testing:
+- Test API endpoints
+- Test database operations
+- Test authentication flow
+3. Security Testing:
+- Test authentication mechanisms
+- Test input validation
+- Test authorization controls
+PERFORMANCE CONSIDERATIONS
+==========================
+1. Database Optimization:
+- Indexes on frequently queried fields
+- Pagination for large datasets
+- Efficient query patterns
+2. Caching:
+- JWT token validation caching
+- Database query result caching
+3. Rate Limiting:
+- API rate limiting implementation
+- Brute force protection
+MAINTENANCE AND MONITORING
+==========================
+1. Logging:
+- Request/response logging
+- Error logging
+- Performance monitoring
+2. Health Checks:
+- Database connectivity checks
+- Server status monitoring
+- API endpoint availability
+3. Backup and Recovery:
+- Database backup strategies
+- Data recovery procedures
+- Disaster recovery planning
+This FRD provides a comprehensive overview of the Todo List API functionality, ensuring all
+requirements are met for a production-ready application.

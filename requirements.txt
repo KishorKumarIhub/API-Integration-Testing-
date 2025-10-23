@@ -1,0 +1,16 @@
+uvicorn
+pydantic
+langchain-groq
+langgraph
+pdfplumber
+pyyaml
+pytest
+requests
+python-dotenv
+fastapi
+python-multipart
+docker
+pytest-json-report
+
+
+#pytest.main([__file__])
