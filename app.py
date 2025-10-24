@@ -350,7 +350,8 @@ def generate_pytest_code(state: WorkflowState) -> WorkflowState:
         "flow_names": scenario.flow_names,
         "base_url": state.base_url,
         "swagger": json.dumps(state.swagger_doc, indent=2, cls=CustomJSONEncoder),
-        "frd": state.frd_text[:3000]
+        "frd": state.frd_text[:3000],
+        "reason": "prerequisite fixture failed"
     }
 
     # Extract the prompt template string for Gemini
