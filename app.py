@@ -266,82 +266,73 @@ def generate_scenarios_node(state: WorkflowState) -> WorkflowState:
 def generate_pytest_code(state: WorkflowState) -> WorkflowState:
     logger.info("Generating pytest code via LLM")
     prompt = ChatPromptTemplate.from_template("""
-    Generate pytest code for the following API testing scenario using the requests library.
-    Validate status codes and JSON structure based on provided Swagger and FRD.
-    Ensure test steps follow the sequential order of flow names as provided, respecting dependencies
-    (e.g., user registration before login, login before resource creation).
+Generate pytest code for the API testing scenario using requests. Validate status codes/JSON per Swagger/FRD. Follow flow_names sequence, respecting dependencies (e.g., login before create, create before get/update/delete).
 
-    CRITICAL REQUIREMENTS:
-    1. Use **session-scoped pytest fixtures** (scope="session") for shared data (e.g., user credentials, auth token, created resource IDs) to ensure a single user registration and login is performed once per test session.
-    2. Handle duplicate registration gracefully (use random emails or expect 409 status).
-    3. Use flexible response validation instead of hardcoded assertions.
-    4. Generate clean, runnable pytest code without any markdown formatting.
-    5. Use proper pytest fixtures for shared state management.
-    6. Handle authentication token sharing between tests using a session-scoped `auth_token` fixture.
-    7. Use random data generation to avoid conflicts (emails, usernames, etc.) using Python's `random` and `string` modules.
-    8. Validate response structure flexibly - check for expected fields without strict assertions.
-    9. Handle both success and expected error cases appropriately.
-    10. **If both registration and login endpoints are available:**
-        - STRICTLY DO NOT access or rely on the password from the registration API response.
-        - Create a **session-scoped** fixture `user_credentials` to generate and store random email, username, and password using `random` and `string`.
-        - Create a **session-scoped** fixture `registered_user` that uses the stored credentials to make the signup request, then returns a dictionary with both the API response data AND the original stored credentials.
-        - Create a **session-scoped** fixture `auth_token` that uses the stored email and password from `registered_user` to make the login request and returns the token.
-        - Ensure all dependent tests (e.g., resource creation, retrieval, update, delete) use the `auth_token` fixture for authentication.
-    11. Do NOT use the `faker` library. Use Python's `random` and `string` modules.
-    12. **COMPREHENSIVE TEST REPORTING - CRITICAL REQUIREMENT**:
-        - Create global variables:
-            - TEST_REPORT = []  # store test details
-            - SCENARIO_FAILED = False  # track overall scenario status
-            - FIXTURE_DETAILS = []  # store fixture usage details
-            - TOTAL_TESTS = 0
-            - PASSED_TESTS = 0
-            - FAILED_TESTS = 0
-        - For each test function:
-            a. Increment TOTAL_TESTS at the start.
-            b. **ALWAYS append to TEST_REPORT and FIXTURE_DETAILS, even if the test skips or fails due to dependencies** - do not place these inside conditional `if` blocks.
-            c. If a prerequisite fixture fails (e.g., no credentials or token), use `pytest.skip(f"Skipped: {reason}")` to explicitly skip the test, log the skip reason in `failure_reason`, set `passed=False`, increment `FAILED_TESTS`, and set `SCENARIO_FAILED=True`.
-            d. For successful cases, set `passed=True` and increment `PASSED_TESTS`.
-            e. Append a detailed dictionary to TEST_REPORT with:
-                - test_name
-                - endpoint
-                - payload (or None if not applicable)
-                - response (or error message if skipped/failed)
-                - status_code (or None if skipped)
-                - expected_status_code
-                - passed
-                - failure_reason (e.g., API error message or skip reason)
-                - expected_response
-            f. For each fixture used in the test, append a dictionary to FIXTURE_DETAILS with:
-                - fixture_name
-                - used_by_tests (list of test names using it)
-                - data (sanitized if sensitive)
-            g. **CRITICAL: For the registration test (e.g., test_register_user), make it DEPEND ON the `registered_user` fixture** - do NOT perform a separate signup request in the test itself to avoid duplicates. Instead, validate the fixture's response (status, structure) and log it. If the fixture failed, skip/log the test.
-            h. Ensure dependent tests (login, create, etc.) check fixtures first: if missing (e.g., no token), skip and log without making API calls.
-        - Create a function save_test_report() that:
-            a. Creates a comprehensive report with:
-                - scenario_summary
-                - total_tests
-                - passed_tests
-                - failed_tests
-                - test_details
-                - fixture_details
-                - overall_status ("passed" if SCENARIO_FAILED is False else "failed")
-            b. Saves this report to "custom_report.json".
-        - Create a session-scoped pytest fixture with autouse=True to ensure the report is saved after all tests complete:
-            @pytest.fixture(scope="session", autouse=True)
-            def session_cleanup():
-                yield
-                save_test_report()
+CRITICAL REQUIREMENTS:
+1. Use session-scoped fixtures (scope="session") for shared data (credentials, token, resource IDs); chain fixtures (e.g., auth_token uses credentials, created_resource uses token).
+2. Handle duplicates (random emails or expect 409).
+3. Flexible response validation (check expected fields, no hard assertions).
+4. Clean, runnable pytest code, no markdown.
+5. Proper fixtures for state management; return dicts with key data (e.g., {{'id': '123', 'response': data}}).
+6. Session-scoped `auth_token` fixture for auth sharing.
+7. Random data via `random`/`string` modules.
+8. Flexible structure checks.
+9. Handle success/error cases.
+10. If registration+login available:
+    - No password from reg response.
+    - Session fixture `user_credentials`: random email/username/password.
+    - Session `registered_user`: uses credentials for signup, returns {{'response': json(), 'credentials': user_credentials}}.
+    - Session `auth_token`: uses email/password from `registered_user` for login, returns {{'token': access_token}}.
+    - Dependents use `auth_token`.
+11. If only login: session `user_credentials` (random email/password), session `auth_token` (login, return token).
+12. For creation (e.g., POST /todos):
+    - Session fixture `created_todo` (depends on auth_token).
+    - POST with random payload; extract ID from response.json()['id'] (NEVER hardcode like 1/2).
+    - Return {{'id': id, 'response': json()}}; if fail (≠201), store error, ID=None.
+13. For dependents (GET/PUT/DELETE /todos/:id):
+    - Depend on creation fixture; extract ID dynamically (todo_id = created_todo['id']).
+    - If ID None/missing, skip: `pytest.skip("Skipped: prerequisite failed")` (no API call).
+    - Use exact ID in URL (f"/todos/{{todo_id}}"); pass ID if needed.
+14. Chain: credentials → reg/login → token → create → dependents.
+    - Creation tests: depend on fixture, validate stored response (no re-call).
+    - No repeated calls; reuse fixture data.
+15. No `faker`; use `random`/`string`.
+16. **VALIDATION TESTS, NOT RE-EXECUTION**: For each flow, generate a test function that DEPENDS ON the corresponding fixture and VALIDATES the fixture's stored response/data. DO NOT perform API calls inside test bodies for setup flows (e.g., no re-signup in test_user_registration). Instead:
+    - For registration test: def test_user_registration(registered_user): – check registered_user['response']['status_code'] == 201, etc.
+    - For login test: def test_user_login(registered_user, auth_token): – check auth_token['token'] is not None.
+    - For create test: def test_create_todo(auth_token, created_todo): – check created_todo['response']['status_code'] == 201.
+    - For get/update/delete: def test_get_todo(created_todo, auth_token): – if created_todo['id'], validate response using the ID; else skip.
+    - ALWAYS inject ALL relevant fixtures as function parameters (e.g., auth_token where needed for headers).
+    - This avoids duplicates: Fixtures run ONCE at session start; tests only validate.
+17. COMPREHENSIVE REPORTING:
+    - Globals: TEST_REPORT=[], SCENARIO_FAILED=False, FIXTURE_DETAILS=[], TOTAL_TESTS=PASSED_TESTS=FAILED_TESTS=0.
+    - Per test:
+        a. Increment TOTAL_TESTS.
+        b. ALWAYS append to TEST_REPORT/FIXTURE_DETAILS (even skips/fails; outside conditionals).
+        c. If prereq fails (no creds/token/ID), skip w/ reason, passed=False, ++FAILED_TESTS, SCENARIO_FAILED=True.
+        d. Success: passed=True, ++PASSED_TESTS.
+        e. Append to TEST_REPORT: {{'test_name', 'endpoint', 'payload' (or None), 'response' (or err), 'status_code' (or None), 'expected_status_code', 'passed', 'failure_reason' (API/skip), 'expected_response'}}.
+        f. Per fixture: append {{'fixture_name', 'used_by_tests': [names], 'data' (sanitized)}}.
+        g. Creation/login tests: depend on fixture, validate stored response; skip/log if failed.
+        h. Dependents: check prereqs first; skip/log missing data (e.g., "Missing todo_id") w/o calls.
+    - Helper `save_test_report()`:
+        a. Dict: {{'scenario_summary', 'total_tests', 'passed_tests', 'failed_tests', 'test_details', 'fixture_details', 'overall_status': "passed" if not SCENARIO_FAILED else "failed"}}.
+        b. Save/overwrite "custom_report.json".
+        c. Call after EVERY test (in function) + end-session (autouse fixture).
+    - Session autouse fixture:
+        @pytest.fixture(scope="session", autouse=True)
+        def session_cleanup():
+            yield
+            save_test_report()
 
-    Scenario Name: {scenario_name}
-    Flow Names: {flow_names}
-    Base URL: {base_url}
-    Swagger: {swagger}
-    FRD: {frd}
+Scenario: {scenario_name}
+Flows: {flow_names}
+Base URL: {base_url}
+Swagger: {swagger}
+FRD: {frd}
 
-    Return only runnable Python code without any markdown or additional text.
+Return only runnable Python code, no markdown/extras.
 """)
-
 
     scenario = state.scenarios[0] if state.scenarios else state.test_results.get("scenario_details")
 
