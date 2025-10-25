@@ -458,7 +458,7 @@
         ],
         "responses": {
           "200": {
-            "description": "List of todos retrieved successfully",
+            "description": "Todos retrieved successfully",
             "content": {
               "application/json": {
                 "schema": {

@@ -273,7 +273,7 @@ CRITICAL REQUIREMENTS:
 2. Handle duplicates (random emails or expect 409).
 3. Flexible response validation (check expected fields, no hard assertions).
 4. Clean, runnable pytest code, no markdown.
-5. Proper fixtures for state management; return dicts with key data (e.g., {{'id': '123', 'response': data}}).
+5. Proper fixtures for state management; return dicts with key data (e.g., {{\'id\': \'123\', \'response\': data}}).
 6. Session-scoped `auth_token` fixture for auth sharing.
 7. Random data via `random`/`string` modules.
 8. Flexible structure checks.
@@ -281,14 +281,14 @@ CRITICAL REQUIREMENTS:
 10. If registration+login available:
     - No password from reg response.
     - Session fixture `user_credentials`: random email/username/password.
-    - Session `registered_user`: uses credentials for signup, returns {{'response': json(), 'credentials': user_credentials}}.
-    - Session `auth_token`: uses email/password from `registered_user` for login, returns {{'token': access_token}}.
+    - Session `registered_user`: uses credentials for signup, returns {{\'response\': json(), \'credentials\': user_credentials}}.
+    - Session `auth_token`: uses email/password from `registered_user` for login, returns {{\'token\': access_token}}.
     - Dependents use `auth_token`.
 11. If only login: session `user_credentials` (random email/password), session `auth_token` (login, return token).
 12. For creation (e.g., POST /todos):
     - Session fixture `created_todo` (depends on auth_token).
     - POST with random payload; extract ID from response.json()['id'] (NEVER hardcode like 1/2).
-    - Return {{'id': id, 'response': json()}}; if fail (≠201), store error, ID=None.
+    - Return {{\'id\': id, \'response\': json()}}; if fail (≠201), store error, ID=None.
 13. For dependents (GET/PUT/DELETE /todos/:id):
     - Depend on creation fixture; extract ID dynamically (todo_id = created_todo['id']).
     - If ID None/missing, skip: `pytest.skip("Skipped: prerequisite failed")` (no API call).
@@ -304,26 +304,26 @@ CRITICAL REQUIREMENTS:
     - For get/update/delete: def test_get_todo(created_todo, auth_token): – if created_todo['id'], validate response using the ID; else skip.
     - ALWAYS inject ALL relevant fixtures as function parameters (e.g., auth_token where needed for headers).
     - This avoids duplicates: Fixtures run ONCE at session start; tests only validate.
-17. COMPREHENSIVE REPORTING:
+17. COMPREHENSIVE REPORTING (ENSURE REPORT IS ALWAYS UPDATED EVEN FOR FAILURES/SKIPS):
     - Globals: TEST_REPORT=[], SCENARIO_FAILED=False, FIXTURE_DETAILS=[], TOTAL_TESTS=PASSED_TESTS=FAILED_TESTS=0.
-    - Per test:
-        a. Increment TOTAL_TESTS.
-        b. ALWAYS append to TEST_REPORT/FIXTURE_DETAILS (even skips/fails; outside conditionals).
-        c. If prereq fails (no creds/token/ID), skip w/ reason, passed=False, ++FAILED_TESTS, SCENARIO_FAILED=True.
-        d. Success: passed=True, ++PASSED_TESTS.
-        e. Append to TEST_REPORT: {{'test_name', 'endpoint', 'payload' (or None), 'response' (or err), 'status_code' (or None), 'expected_status_code', 'passed', 'failure_reason' (API/skip), 'expected_response'}}.
-        f. Per fixture: append {{'fixture_name', 'used_by_tests': [names], 'data' (sanitized)}}.
-        g. Creation/login tests: depend on fixture, validate stored response; skip/log if failed.
-        h. Dependents: check prereqs first; skip/log missing data (e.g., "Missing todo_id") w/o calls.
-    - Helper `save_test_report()`:
-        a. Dict: {{'scenario_summary', 'total_tests', 'passed_tests', 'failed_tests', 'test_details', 'fixture_details', 'overall_status': "passed" if not SCENARIO_FAILED else "failed"}}.
-        b. Save/overwrite "custom_report.json".
-        c. Call after EVERY test (in function) + end-session (autouse fixture).
-    - Session autouse fixture:
+    - Per test (CRITICAL: Handle ALL cases - success, failure, skip):
+        a. Increment TOTAL_TESTS at the START of EVERY test function (even if skipped).
+        b. ALWAYS append to TEST_REPORT (even for skips/fails) WITHIN the test function, BEFORE any skip or return. For skips: set passed=False, failure_reason="Skipped: prerequisite failed", status_code=None, response=None. For failures: capture actual response/status.
+        c. For fixture failures: In fixtures, append to FIXTURE_DETAILS immediately after execution (e.g., {{\'fixture_name\': \'registered_user\', \'used_by_tests\': [...], \'data\': sanitized_response, \'status\': \'failed\' if error else \'passed\'}}).
+        d. If prereq fails (no creds/token/ID): pytest.skip("Skipped: prerequisite failed"), but STILL append to TEST_REPORT with passed=False, ++FAILED_TESTS, SCENARIO_FAILED=True, and call save_test_report() AFTER the skip logic.
+        e. Success: passed=True, ++PASSED_TESTS, append details.
+        f. Append to TEST_REPORT: {{\'test_name\', \'endpoint\', \'payload\' (or None), \'response\' (or err or None for skip), \'status_code\' (or None for skip), \'expected_status_code\', \'passed\', \'failure_reason\' (detailed, e.g., "API error: 500" or "Skipped: no token"), \'expected_response\'}}. For skips, use endpoint/payload from fixture if available.
+        g. After EVERY append (success/fail/skip), IMMEDIATELY call save_test_report() to update the JSON file in real-time.
+        h. For dependents: check prereqs first; if missing, append skip details to TEST_REPORT, ++FAILED_TESTS, call save_test_report(), then pytest.skip (no API call).
+    - Helper `save_test_report()` (MANDATORY FOR ALL CASES):
+        a. Dict: {{\'scenario_summary\': scenario_name, \'total_tests\', \'passed_tests\', \'failed_tests\', \'test_details\': TEST_REPORT, \'fixture_details\': FIXTURE_DETAILS, \'overall_status\': "passed" if not SCENARIO_FAILED else "failed"}}.
+        b. ALWAYS save/overwrite "custom_report.json" with json.dump (use indent=4 for readability).
+        c. Call save_test_report() at the END of EVERY test function (after append) AND in fixtures after execution.
+    - Session autouse fixture (BACKUP ENSURE):
         @pytest.fixture(scope="session", autouse=True)
         def session_cleanup():
             yield
-            save_test_report()
+            save_test_report()  # Final save even if some tests skipped/failed
 
 Scenario: {scenario_name}
 Flows: {flow_names}
