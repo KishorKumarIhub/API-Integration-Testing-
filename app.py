@@ -124,7 +124,8 @@ def cleanup_storage(delete_all: bool = False):
 
 def save_to_storage(content, file_path, is_binary=False):
     mode = 'wb' if is_binary else 'w'
-    with open(file_path, mode) as f:
+    encoding = None if is_binary else 'utf-8'
+    with open(file_path, mode, encoding=encoding) as f:
         f.write(content)
     logger.info(f"Saved content to {file_path}")
 
@@ -132,7 +133,8 @@ def load_from_storage(file_path, is_binary=False):
     if not os.path.exists(file_path):
         raise ValueError(f"File not found: {file_path}")
     mode = 'rb' if is_binary else 'r'
-    with open(file_path, mode) as f:
+    encoding = None if is_binary else 'utf-8'
+    with open(file_path, mode, encoding=encoding) as f:
         return f.read()
 
 # --------------------------------------------
@@ -177,17 +179,37 @@ def generate_scenarios_node(state: WorkflowState) -> WorkflowState:
     logger.info("Generating scenarios using LLM")
     try:
         prompt = ChatPromptTemplate.from_template("""
-        You are an expert QA engineer. Given this Swagger JSON and FRD text,
-        generate integration test scenarios. Return **only valid JSON** with scenario name and flow names.
-        Do not include markdown, code fences, or any additional text outside the JSON structure.
+        You are an expert QA engineer specializing in API integration testing. Your task is to deeply analyze the provided Swagger (OpenAPI) specification and FRD (Functional Requirements Document) text to identify all endpoints, their dependencies, payloads, parameters, responses, and role-based access controls.
 
-        Ensure flow names are in a logical, sequential order based on dependencies. For example:
-        - User-related flows: "POST /auth/signup" must come before "POST /auth/login".
-        - Resource creation (e.g., "POST /products") requires authentication, so "POST /auth/login" must precede it.
-        - Retrieval or modification (e.g., "GET /products/:id", "PUT /products/:id") follows creation.
+        **DETAILED ANALYSIS INSTRUCTIONS:**
+        1. **Parse Swagger Thoroughly:**
+           - List all paths (endpoints) with methods (GET, POST, PUT, DELETE, etc.).
+           - For each endpoint: Extract required/optional parameters (path, query, header, cookie), request body schema (payload fields, types, constraints like required fields, enums), response schemas (status codes, body fields).
+           - Identify authentication/authorization: Look for security schemes (e.g., API keys, JWT, OAuth), required headers (e.g., Authorization: Bearer {{token}}), roles/permissions in descriptions or security scopes.
+           - Detect dynamic features: e.g., entities or actions restricted to certain user types, or role-based actions and permissions.
 
-        Analyze the Swagger and FRD to determine dependencies and order flows accordingly.
-        Importantly: If there is a login endpoint, there must be a register endpoint that comes before it.
+        2. **Parse FRD Text Thoroughly:**
+           - Extract business flows, user stories, and feature-specific logic.
+           - Identify dependencies between endpoints (e.g., a resource must exist before another can be created or referenced).
+           - Note role-based conditions, preconditions, and sequencing of actions.
+           - Detect order-sensitive or multi-user operations (e.g., creation → approval → update → retrieval).
+
+        3. **Infer Dependencies and Flows:**
+           - Construct logical flow sequences that mirror realistic user or system journeys.
+           - Ensure each action follows its necessary prerequisites (registration before login, creation before update/delete, authentication before protected actions, etc.).
+           - Maintain consistent context across actions — for example, use valid sessions or tokens throughout related sequences without breaking the flow or mixing unrelated user contexts.
+           - If multiple users or roles exist, design flows to switch context only when logically required, keeping actions grouped coherently for each user or system entity.
+           - Avoid illogical transitions (e.g., performing dependent actions under the wrong session, skipping re-authentication when switching users, or using resources that haven’t been created yet).
+           - Capture error and negative flows where applicable (e.g., unauthorized access, invalid data).
+
+        4. **Generate Scenarios:**
+           - Create 3–5 comprehensive integration scenarios that represent end-to-end journeys.
+           - Each scenario should have:
+             - A meaningful "scenario_name"
+             - An ordered "flow_names" array — a sequence of endpoint interactions with short explanatory notes describing what each step accomplishes and any key conditions.
+           - Ensure each scenario forms a coherent, executable story that can be reproduced in a real testing pipeline.
+           - Maintain dependency correctness (e.g., authentication → creation → dependent action → verification).
+           - Preserve logical user/session continuity throughout.
 
         Swagger (OpenAPI spec):
         {swagger}
@@ -195,18 +217,22 @@ def generate_scenarios_node(state: WorkflowState) -> WorkflowState:
         FRD text:
         {frd}
 
-        Format:
+        **OUTPUT FORMAT: Strictly Return ONLY valid JSON array, no extra text/markdown.**
         [
           {{
-            "scenario_name": "string",
-            "flow_names": ["string"]
-          }}
+            "scenario_name": "Descriptive scenario name",
+            "flow_names": [
+              "POST /endpoint (Short explanation of what this step does and its purpose and what shouldn't need to do )",
+              "GET /endpoint (Short explanation of what this retrieves or verifies and what shouldn't need to do)"
+            ]
+          }},
+          ...
         ]
         """)
 
         inputs = {
             "swagger": json.dumps(state.swagger_doc, indent=2, cls=CustomJSONEncoder),
-            "frd": state.frd_text[:3000]
+            "frd": state.frd_text
         }
 
         # Extract the prompt template string for Gemini
@@ -263,86 +289,61 @@ def generate_scenarios_node(state: WorkflowState) -> WorkflowState:
         logger.error(f"Error generating scenarios: {str(e)}")
         raise ValueError(f"Scenario generation failed: {str(e)}")
 
+
 def generate_pytest_code(state: WorkflowState) -> WorkflowState:
     logger.info("Generating pytest code via LLM")
     prompt = ChatPromptTemplate.from_template("""
-Generate pytest code for the API testing scenario using requests. Validate status codes/JSON per Swagger/FRD. Follow flow_names sequence, respecting dependencies (e.g., login before create, create before get/update/delete).
+You are an expert Python pytest developer for API integration testing. Generate comprehensive, runnable pytest code based on the analyzed Swagger, FRD, and provided scenario. Focus on dependency chaining, role-based auth, dynamic IDs, and flexible validation.
 
-CRITICAL REQUIREMENTS:
-1. Use session-scoped fixtures (scope="session") for shared data (credentials, token, resource IDs); chain fixtures (e.g., auth_token uses credentials, created_resource uses token).
-2. Handle duplicates (random emails or expect 409).
-3. Flexible response validation (check expected fields, no hard assertions).
-4. Clean, runnable pytest code, no markdown.
-5. Proper fixtures for state management; return dicts with key data (e.g., {{\'id\': \'123\', \'response\': data}}).
-6. Session-scoped `auth_token` fixture for auth sharing.
-7. Random data via `random`/`string` modules.
-8. Flexible structure checks.
-9. Handle success/error cases.
-10. If registration+login available:
-    - No password from reg response.
-    - Session fixture `user_credentials`: random email/username/password.
-    - Session `registered_user`: uses credentials for signup, returns {{\'response\': json(), \'credentials\': user_credentials}}.
-    - Session `auth_token`: uses email/password from `registered_user` for login, returns {{\'token\': access_token}}.
-    - Dependents use `auth_token`.
-11. If only login: session `user_credentials` (random email/password), session `auth_token` (login, return token).
-12. For creation (e.g., POST /todos):
-    - Session fixture `created_todo` (depends on auth_token).
-    - POST with random payload; extract ID from response.json()['id'] (NEVER hardcode like 1/2).
-    - Return {{\'id\': id, \'response\': json()}}; if fail (≠201), store error, ID=None.
-13. For dependents (GET/PUT/DELETE /todos/:id):
-    - Depend on creation fixture; extract ID dynamically (todo_id = created_todo['id']).
-    - If ID None/missing, skip: `pytest.skip("Skipped: prerequisite failed")` (no API call).
-    - Use exact ID in URL (f"/todos/{{todo_id}}"); pass ID if needed.
-14. Chain: credentials → reg/login → token → create → dependents.
-    - Creation tests: depend on fixture, validate stored response (no re-call).
-    - No repeated calls; reuse fixture data.
-15. No `faker`; use `random`/`string`.
-16. **VALIDATION TESTS, NOT RE-EXECUTION**: For each flow, generate a test function that DEPENDS ON the corresponding fixture and VALIDATES the fixture's stored response/data. DO NOT perform API calls inside test bodies for setup flows (e.g., no re-signup in test_user_registration). Instead:
-    - For registration test: def test_user_registration(registered_user): – check registered_user['response']['status_code'] == 201, etc.
-    - For login test: def test_user_login(registered_user, auth_token): – check auth_token['token'] is not None.
-    - For create test: def test_create_todo(auth_token, created_todo): – check created_todo['response']['status_code'] == 201.
-    - For get/update/delete: def test_get_todo(created_todo, auth_token): – if created_todo['id'], validate response using the ID; else skip.
-    - ALWAYS inject ALL relevant fixtures as function parameters (e.g., auth_token where needed for headers).
-    - This avoids duplicates: Fixtures run ONCE at session start; tests only validate.
-17. COMPREHENSIVE REPORTING (ENSURE REPORT IS ALWAYS UPDATED EVEN FOR FAILURES/SKIPS):
-    - Globals: TEST_REPORT=[], SCENARIO_FAILED=False, FIXTURE_DETAILS=[], TOTAL_TESTS=PASSED_TESTS=FAILED_TESTS=0.
-    - Per test (CRITICAL: Handle ALL cases - success, failure, skip):
-        a. Increment TOTAL_TESTS at the START of EVERY test function (even if skipped).
-        b. ALWAYS append to TEST_REPORT (even for skips/fails) WITHIN the test function, BEFORE any skip or return. For skips: set passed=False, failure_reason="Skipped: prerequisite failed", status_code=None, response=None. For failures: capture actual response/status.
-        c. For fixture failures: In fixtures, append to FIXTURE_DETAILS immediately after execution (e.g., {{\'fixture_name\': \'registered_user\', \'used_by_tests\': [...], \'data\': sanitized_response, \'status\': \'failed\' if error else \'passed\'}}).
-        d. If prereq fails (no creds/token/ID): pytest.skip("Skipped: prerequisite failed"), but STILL append to TEST_REPORT with passed=False, ++FAILED_TESTS, SCENARIO_FAILED=True, and call save_test_report() AFTER the skip logic.
-        e. Success: passed=True, ++PASSED_TESTS, append details.
-        f. Append to TEST_REPORT: {{\'test_name\', \'endpoint\', \'payload\' (or None), \'response\' (or err or None for skip), \'status_code\' (or None for skip), \'expected_status_code\', \'passed\', \'failure_reason\' (detailed, e.g., "API error: 500" or "Skipped: no token"), \'expected_response\'}}. For skips, use endpoint/payload from fixture if available.
-        g. After EVERY append (success/fail/skip), IMMEDIATELY call save_test_report() to update the JSON file in real-time.
-        h. For dependents: check prereqs first; if missing, append skip details to TEST_REPORT, ++FAILED_TESTS, call save_test_report(), then pytest.skip (no API call).
-    - Helper `save_test_report()` (MANDATORY FOR ALL CASES):
-        a. Dict: {{\'scenario_summary\': scenario_name, \'total_tests\', \'passed_tests\', \'failed_tests\', \'test_details\': TEST_REPORT, \'fixture_details\': FIXTURE_DETAILS, \'overall_status\': "passed" if not SCENARIO_FAILED else "failed"}}.
-        b. ALWAYS save/overwrite "custom_report.json" with json.dump (use indent=4 for readability).
-        c. Call save_test_report() at the END of EVERY test function (after append) AND in fixtures after execution.
-    - Session autouse fixture (BACKUP ENSURE):
-        @pytest.fixture(scope="session", autouse=True)
-        def session_cleanup():
-            yield
-            save_test_report()  # Final save even if some tests skipped/failed
+**DETAILED ANALYSIS RECAP (Use this to inform code):**
+- Endpoints: From Swagger – paths, methods, params (path/query/header), payloads (request body schemas), responses (status codes, fields).
+- Dependencies: Chain fixtures logically (e.g., register → login → create product (extract ID) → create order (use product_id)).
+- Roles: If detected (e.g., admin for projects), include role assignment in flows; use headers/tokens; test role-specific successes/failures (e.g., 403 for unauthorized).
+- Dynamic: Extract IDs from responses (e.g., product_id = response.json()["id"]); no hardcoding.
+- FRD: Validate against requirements (e.g., expected fields, business rules like "order requires valid product").
+
+**CRITICAL CODE REQUIREMENTS:**
+1. **Imports & Setup:** import requests, pytest, json, random, string; session = requests.Session(); base_url.
+2. **Fixtures (session scope, chained):**
+   - user_credentials: Random email/username/password dict.
+   - registered_user (if register exists): POST /auth/register with creds; return {{"response": r, "credentials": creds, "id": r.json().get("id") if 201}}.
+   - auth_token: POST /auth/login with creds from registered_user or hardcoded test creds; add "Authorization": f"Bearer {{token}}" to session.headers; return {{"token": token, "response": r}}.
+   - Role fixtures if needed: e.g., assign_role (POST /users/{{id}}/roles, depends on registered_user/auth_token); return role data.
+   - created_product: POST /products with random payload (use schema: e.g., {{"name": random_string, "price": random_int}}); depends on auth_token; extract id; return {{"id": id, "response": r}}.
+   - created_order: POST /orders with payload including {{"product_id": created_product["id"]}}; depends on created_product/auth_token; return {{"id": id, "response": r}}.
+   - For projects/dynamic: e.g., created_project (POST /projects), assigned_role (update with role), then role-specific actions.
+   - Handle failures: If status != expected (e.g., 201), log error, set id=None, but continue (for skips).
+3. **Tests (Validate fixtures, no re-execution):**
+   - def test_<flow>(relevant_fixtures): e.g., test_user_registration(registered_user): assert registered_user["response"].status_code == 201; validate json fields per schema/FRD.
+   - For dependents: if prereq_id is None: append skip to report, pytest.skip("Prereq failed"); else: perform call with dynamic ID, validate.
+   - Role tests: e.g., test_admin_update_project(auth_token, created_project): if admin_role, expect 200; else test 403.
+   - Inject all needed fixtures as params (e.g., auth_token for headers).
+4. **Reporting (Comprehensive, real-time):**
+   - Globals: TEST_REPORT = [], FIXTURE_DETAILS = [], TOTAL_TESTS = PASSED_TESTS = FAILED_TESTS = 0, SCENARIO_FAILED = False.
+   - In fixtures: After exec, append to FIXTURE_DETAILS {{"name": "registered_user", "status": "passed/failed", "data": sanitized_resp, "used_by": [test_names]}}; save_test_report().
+   - In tests: At start, TOTAL_TESTS +=1; append to TEST_REPORT {{"test_name", "endpoint": flow_name, "payload": payload or None, "response": resp.json() or err, "status_code": or None, "expected_status": 201, "passed": True/False, "failure_reason": detailed msg or "Skipped: prereq failed"}}; if skip/fail: FAILED_TESTS +=1, SCENARIO_FAILED=True; ALWAYS call save_test_report() at end.
+   - save_test_report(): Dump to "custom_report.json": {{"scenario_summary": scenario_name, "total_tests", "passed_tests": PASSED_TESTS, "failed_tests": FAILED_TESTS, "test_details": TEST_REPORT, "fixture_details": FIXTURE_DETAILS, "overall_status": "passed" if not SCENARIO_FAILED else "failed"}}; use json.dump(indent=4).
+   - Session autouse fixture: yield; save_test_report() # Final backup.
+5. **General:** Random data (no faker); handle 409 duplicates (randomize); flexible asserts (check key fields exist/types); session for auth persistence; timeout=10s.
+6. Strictly follow the flow names and the description for each end point 
 
 Scenario: {scenario_name}
-Flows: {flow_names}
+Flows: {flow_names} (respect order/deps)
 Base URL: {base_url}
 Swagger: {swagger}
 FRD: {frd}
 
-Return only runnable Python code, no markdown/extras.
+**OUTPUT: ONLY runnable Python code, no markdown/extras/comments beyond essentials.**
 """)
 
-    scenario = state.scenarios[0] if state.scenarios else state.test_results.get("scenario_details")
+    scenario = state.scenarios[0] if state.scenarios else ScenarioInput(scenario_name="", flow_names=[])
 
     inputs = {
         "scenario_name": scenario.scenario_name,
         "flow_names": scenario.flow_names,
         "base_url": state.base_url,
         "swagger": json.dumps(state.swagger_doc, indent=2, cls=CustomJSONEncoder),
-        "frd": state.frd_text[:3000],
-        "reason": "prerequisite fixture failed"
+        "frd": state.frd_text[:3000]
     }
 
     # Extract the prompt template string for Gemini
@@ -371,7 +372,6 @@ Return only runnable Python code, no markdown/extras.
         code = code.strip("`").replace("python", "").strip()
 
     state.test_code = code
-    logger.info("Generated pytest code:\n%s", code)
 
     save_to_storage(code, TEST_FILE)
     logger.info("✅ Pytest code generated and saved")
